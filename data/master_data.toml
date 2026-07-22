@@ -1,0 +1,10 @@
+[data]
+base_dir = "my_retirement_data"
+
+[files]
+config = "config.toml"
+people = "people.toml"
+accounts = "accounts.toml"
+pensions = "pensions.toml"
+section7 = "section7.toml"
+residence = "residence.toml"
