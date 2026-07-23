@@ -8,6 +8,7 @@ Build the first usable planning workflow by defining how user inputs are supplie
 
 1. Phase 1A - Input layer
 2. Phase 1B - Projection foundation
+3. Phase 1C - Pre-retirement contribution modeling
 
 ## Scope
 
@@ -28,6 +29,8 @@ Build the first usable planning workflow by defining how user inputs are supplie
 15. Add CPP/OAS timing controls with start-age overrides and percentage-of-maximum inputs.
 16. Build in-memory yearly output tables for Income/Expenses and Assets.
 17. Add CLI path to run deterministic projection from loaded config and input data.
+18. Add optional pre-retirement account contribution rules per account using yearly, monthly, biweekly, or annual percent-of-income inputs.
+19. Ensure projections apply contributions only for pre-retirement periods and allow accounts with no contributions.
 
 ## Deliverables
 
@@ -37,6 +40,7 @@ Build the first usable planning workflow by defining how user inputs are supplie
 4. Foundation engines and orchestration flow.
 5. Baseline tabular outputs suitable for export later.
 6. Initial phase test suite for input loading, timeline logic, and balances.
+7. Contribution regression tests covering fixed and income-linked contribution modes.
 
 ## Dependencies
 

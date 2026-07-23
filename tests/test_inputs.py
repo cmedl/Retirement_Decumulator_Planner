@@ -208,6 +208,8 @@ retirement_date = "2040-07-01"
 owner_name = "Chris"
 account_type = "TFSA"
 balance = 1000
+contribution-frequency = "yearly"
+contribution-amount = 1200
 """.strip(),
         encoding="utf-8",
     )
@@ -216,6 +218,9 @@ balance = 1000
 
     assert config.start_year == 2026
     assert household.accounts[0].account_type.value == "tfsa"
+    assert household.accounts[0].contribution is not None
+    assert household.accounts[0].contribution.frequency.value == "yearly"
+    assert household.accounts[0].contribution.amount == 1200
 
 
 def test_load_plan_from_toml_rejects_invalid_section7_income_totals(tmp_path: Path) -> None:
@@ -255,6 +260,89 @@ indexed_to_inflation = true
     )
 
     with pytest.raises(ValidationError, match=r"must total more than zero"):
+        load_plan_from_toml(input_file, project_root=tmp_path)
+
+
+def test_load_plan_from_toml_rejects_bad_contribution_income_person(tmp_path: Path) -> None:
+    data_dir = tmp_path / "my_retirement_data"
+    data_dir.mkdir()
+    input_file = tmp_path / "master_data.toml"
+    input_file.write_text(
+        """
+[data]
+base_dir = "my_retirement_data"
+
+[files]
+people = "people.toml"
+accounts = "accounts.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (data_dir / "people.toml").write_text(
+        """
+[[people]]
+name = "Chris"
+date_of_birth = "1980-05-01"
+retirement_date = "2040-07-01"
+""".strip(),
+        encoding="utf-8",
+    )
+    (data_dir / "accounts.toml").write_text(
+        """
+[[accounts]]
+owner_name = "Chris"
+account_type = "non_registered"
+balance = 1000
+contribution-frequency = "percent_of_income_annual"
+contribution-percent-of-income = 0.02
+contribution-income-source = "NotARealPerson"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match=r"income_person"):
+        load_plan_from_toml(input_file, project_root=tmp_path)
+
+
+def test_load_plan_from_toml_rejects_nested_contribution_table(tmp_path: Path) -> None:
+    data_dir = tmp_path / "my_retirement_data"
+    data_dir.mkdir()
+    input_file = tmp_path / "master_data.toml"
+    input_file.write_text(
+        """
+[data]
+base_dir = "my_retirement_data"
+
+[files]
+people = "people.toml"
+accounts = "accounts.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (data_dir / "people.toml").write_text(
+        """
+[[people]]
+name = "Chris"
+date_of_birth = "1980-05-01"
+retirement_date = "2040-07-01"
+""".strip(),
+        encoding="utf-8",
+    )
+    (data_dir / "accounts.toml").write_text(
+        """
+[[accounts]]
+owner_name = "Chris"
+account_type = "rrsp"
+balance = 1000
+
+[accounts.contribution]
+frequency = "yearly"
+amount = 100
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InputFileError, match=r"deprecated nested contribution block"):
         load_plan_from_toml(input_file, project_root=tmp_path)
 
 

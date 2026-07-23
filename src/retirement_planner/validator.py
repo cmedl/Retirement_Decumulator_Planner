@@ -76,6 +76,27 @@ def validate_phase0_inputs(
         if section7.payer_gross_income + section7.other_party_gross_income <= 0:
             errors.append("section7_obligation gross incomes must total more than zero")
 
+    person_names = {person.name for person in household.people}
+    for account in household.accounts:
+        if account.owner_name not in person_names:
+            errors.append(f"account owner '{account.owner_name}' must match one of the household people")
+        if account.contribution is not None:
+            contribution = account.contribution
+            if contribution.frequency.value in {"yearly", "monthly", "biweekly"}:
+                if contribution.amount is None or contribution.amount < 0:
+                    errors.append(
+                        f"account contribution for {account.owner_name} {account.account_type.value} must have non-negative amount"
+                    )
+            if contribution.frequency.value == "percent_of_income_annual":
+                if contribution.percent_of_income is None or contribution.percent_of_income < 0:
+                    errors.append(
+                        f"account contribution for {account.owner_name} {account.account_type.value} must have non-negative percent_of_income"
+                    )
+                if contribution.income_person not in person_names:
+                    errors.append(
+                        f"account contribution income_person '{contribution.income_person}' must match one of the household people"
+                    )
+
     errors.extend(_validate_data_dir(config, project_root=project_root))
 
     if errors:

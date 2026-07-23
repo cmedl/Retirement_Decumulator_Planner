@@ -16,6 +16,8 @@ from retirement_planner.config import PlannerConfig
 from retirement_planner.models import (
     AccountBalance,
     AccountType,
+    ContributionFrequency,
+    ContributionRule,
     DefinedBenefitPension,
     EconomicAssumptions,
     HouseholdPlan,
@@ -92,11 +94,104 @@ def _load_account(entry: dict[str, Any]) -> AccountBalance:
             f"Invalid account_type '{account_type}' in {context}. Expected one of: {valid_values}"
         ) from exc
 
+    contribution = _load_account_contribution(entry, context)
+
     return AccountBalance(
         owner_name=str(_require(entry, "owner_name", context)),
         account_type=normalized_type,
         balance=float(_require(entry, "balance", context)),
+        contribution=contribution,
     )
+
+
+def _first_present(mapping: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
+def _load_account_contribution(account_entry: dict[str, Any], context: str) -> ContributionRule | None:
+    # New schema: per-account optional metadata keys (no nested [accounts.contribution] table).
+    frequency_raw = _first_present(
+        account_entry,
+        (
+            "contribution-frequency",
+            "contribution_frequency",
+        ),
+    )
+    amount = _first_present(
+        account_entry,
+        (
+            "contribution-amount",
+            "contribution_amount",
+        ),
+    )
+    percent_of_income = _first_present(
+        account_entry,
+        (
+            "contribution-percent-of-income",
+            "contribution_percent_of_income",
+        ),
+    )
+    income_source = _first_present(
+        account_entry,
+        (
+            "contribution-income-source",
+            "contribution_income_source",
+            "contribution-source",
+            "contribution_source",
+            "income_person",
+        ),
+    )
+
+    if "contribution" in account_entry:
+        raise InputFileError(
+            f"{context} uses deprecated nested contribution block. Use per-account keys like contribution-frequency and contribution-amount."
+        )
+
+    if frequency_raw is None:
+        if amount is not None or percent_of_income is not None or income_source is not None:
+            raise InputFileError(
+                f"{context} has contribution metadata but is missing contribution-frequency"
+            )
+        return None
+
+    frequency_raw = str(frequency_raw).strip().lower()
+    try:
+        frequency = ContributionFrequency(frequency_raw)
+    except ValueError as exc:
+        valid = ", ".join(member.value for member in ContributionFrequency)
+        raise InputFileError(
+            f"Invalid contribution frequency '{frequency_raw}' in {context}. Expected one of: {valid}"
+        ) from exc
+
+    if frequency in {
+        ContributionFrequency.YEARLY,
+        ContributionFrequency.MONTHLY,
+        ContributionFrequency.BIWEEKLY,
+    }:
+        if amount is None:
+            raise InputFileError(
+                f"Contribution frequency '{frequency.value}' in {context} requires 'amount'"
+            )
+        return ContributionRule(
+            frequency=frequency,
+            amount=float(amount),
+        )
+
+    if frequency == ContributionFrequency.PERCENT_OF_INCOME_ANNUAL:
+        if percent_of_income is None or income_source is None:
+            raise InputFileError(
+                f"Contribution frequency '{frequency.value}' in {context} requires contribution-percent-of-income and contribution-income-source"
+            )
+        return ContributionRule(
+            frequency=frequency,
+            percent_of_income=float(percent_of_income),
+            income_person=str(income_source),
+        )
+
+    return None
 
 
 def _load_pension(entry: dict[str, Any]) -> DefinedBenefitPension:

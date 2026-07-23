@@ -7,6 +7,8 @@ from retirement_planner.config import PlannerConfig
 from retirement_planner.models import (
     AccountBalance,
     AccountType,
+    ContributionFrequency,
+    ContributionRule,
     DefinedBenefitPension,
     EconomicAssumptions,
     HouseholdPlan,
@@ -82,6 +84,7 @@ def test_project_household_builds_yearly_rows() -> None:
             salary_growth_rate=0.02,
             house_growth_rate=0.02,
         ),
+        run_date=date(2026, 1, 1),
     )
 
     result = project_household(_projection_household(), config)
@@ -93,7 +96,12 @@ def test_project_household_builds_yearly_rows() -> None:
 
 
 def test_project_household_projects_account_balances() -> None:
-    config = PlannerConfig(start_year=2026, end_year=2026, assumptions=EconomicAssumptions())
+    config = PlannerConfig(
+        start_year=2026,
+        end_year=2026,
+        run_date=date(2026, 1, 1),
+        assumptions=EconomicAssumptions(),
+    )
     household = _projection_household()
 
     result = project_household(household, config)
@@ -103,7 +111,12 @@ def test_project_household_projects_account_balances() -> None:
 
 
 def test_projection_table_includes_summary_header() -> None:
-    config = PlannerConfig(start_year=2026, end_year=2026, assumptions=EconomicAssumptions())
+    config = PlannerConfig(
+        start_year=2026,
+        end_year=2026,
+        run_date=date(2026, 1, 1),
+        assumptions=EconomicAssumptions(),
+    )
     result = project_household(_projection_household(), config)
 
     table = format_household_projection_table(result, limit=1)
@@ -111,8 +124,100 @@ def test_projection_table_includes_summary_header() -> None:
     assert "2026" in table
 
 
+def test_pre_retirement_contribution_applied_and_post_retirement_stops() -> None:
+    config = PlannerConfig(
+        start_year=2026,
+        end_year=2034,
+        assumptions=EconomicAssumptions(
+            inflation_rate=0.02,
+            investment_return_rate=0.00,
+            salary_growth_rate=0.00,
+            house_growth_rate=0.00,
+        ),
+        run_date=date(2026, 1, 1),
+    )
+    household = HouseholdPlan(
+        people=[
+            PersonProfile(
+                name="Chris",
+                date_of_birth=date(1972, 10, 4),
+                retirement_date=date(2032, 10, 4),
+                salary_start=100_000,
+                salary_growth_rate=0.0,
+            )
+        ],
+        accounts=[
+            AccountBalance(
+                owner_name="Chris",
+                account_type=AccountType.TFSA,
+                balance=10_000,
+                contribution=ContributionRule(
+                    frequency=ContributionFrequency.YEARLY,
+                    amount=1_200,
+                ),
+            )
+        ],
+    )
+
+    result = project_household(household, config)
+    row_2026 = next(r for r in result.account_rows if r.year == 2026 and r.account_type == AccountType.TFSA)
+    row_2034 = next(r for r in result.account_rows if r.year == 2034 and r.account_type == AccountType.TFSA)
+
+    assert row_2026.closing_balance == pytest.approx(11_200)
+    assert row_2034.closing_balance == pytest.approx(row_2034.opening_balance)
+
+
+def test_percent_income_contribution_uses_named_income() -> None:
+    config = PlannerConfig(
+        start_year=2026,
+        end_year=2026,
+        assumptions=EconomicAssumptions(
+            inflation_rate=0.02,
+            investment_return_rate=0.00,
+            salary_growth_rate=0.00,
+            house_growth_rate=0.00,
+        ),
+        run_date=date(2026, 1, 1),
+    )
+    household = HouseholdPlan(
+        people=[
+            PersonProfile(
+                name="Chris",
+                date_of_birth=date(1972, 10, 4),
+                retirement_date=date(2032, 10, 4),
+                salary_start=100_000,
+                salary_growth_rate=0.0,
+            )
+        ],
+        accounts=[
+            AccountBalance(
+                owner_name="Chris",
+                account_type=AccountType.NON_REGISTERED,
+                balance=0,
+                contribution=ContributionRule(
+                    frequency=ContributionFrequency.PERCENT_OF_INCOME_ANNUAL,
+                    percent_of_income=0.05,
+                    income_person="Chris",
+                ),
+            )
+        ],
+    )
+
+    result = project_household(household, config)
+    row_2026 = next(
+        r for r in result.account_rows if r.year == 2026 and r.account_type == AccountType.NON_REGISTERED
+    )
+
+    assert row_2026.closing_balance == pytest.approx(5_000)
+
+
 def test_write_projection_output_csv(tmp_path) -> None:
-    config = PlannerConfig(start_year=2026, end_year=2026, assumptions=EconomicAssumptions())
+    config = PlannerConfig(
+        start_year=2026,
+        end_year=2026,
+        run_date=date(2026, 1, 1),
+        assumptions=EconomicAssumptions(),
+    )
     result = project_household(_projection_household(), config)
 
     output_path = write_projection_output(result, tmp_path / "projection.csv")
@@ -136,7 +241,12 @@ def test_write_projection_output_csv(tmp_path) -> None:
 
 
 def test_write_projection_output_ods(tmp_path) -> None:
-    config = PlannerConfig(start_year=2026, end_year=2026, assumptions=EconomicAssumptions())
+    config = PlannerConfig(
+        start_year=2026,
+        end_year=2026,
+        run_date=date(2026, 1, 1),
+        assumptions=EconomicAssumptions(),
+    )
     result = project_household(_projection_household(), config)
 
     output_path = write_projection_output(result, tmp_path / "projection.ods")
@@ -150,3 +260,47 @@ def test_write_projection_output_ods(tmp_path) -> None:
         assert "Chris Spousal RRSP" not in content_xml
         assert "Katie Spousal RRSP" in content_xml
         assert "Estate after tax" in content_xml
+
+
+def test_first_year_growth_and_contribution_are_prorated_from_run_date() -> None:
+    config = PlannerConfig(
+        start_year=2026,
+        end_year=2026,
+        run_date=date(2026, 7, 22),
+        assumptions=EconomicAssumptions(
+            inflation_rate=0.02,
+            investment_return_rate=0.05,
+            salary_growth_rate=0.00,
+            house_growth_rate=0.00,
+        ),
+    )
+    household = HouseholdPlan(
+        people=[
+            PersonProfile(
+                name="Chris",
+                date_of_birth=date(1972, 10, 4),
+                retirement_date=date(2032, 10, 4),
+                salary_start=100_000,
+                salary_growth_rate=0.0,
+            )
+        ],
+        accounts=[
+            AccountBalance(
+                owner_name="Chris",
+                account_type=AccountType.TFSA,
+                balance=10_000,
+                contribution=ContributionRule(
+                    frequency=ContributionFrequency.YEARLY,
+                    amount=1_200,
+                ),
+            )
+        ],
+    )
+
+    result = project_household(household, config)
+    account_row = next(r for r in result.account_rows if r.year == 2026)
+    projected_fraction = (date(2027, 1, 1) - date(2026, 7, 22)).days / 365
+
+    expected_growth = 10_000 * 0.05 * projected_fraction
+    expected_contribution = 1_200 * projected_fraction
+    assert account_row.closing_balance == pytest.approx(10_000 + expected_growth + expected_contribution)

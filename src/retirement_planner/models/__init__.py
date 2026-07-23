@@ -1,6 +1,12 @@
 """Domain model exports."""
 
-from .accounts import ACCOUNT_TYPE_VALUES, AccountBalance, AccountType
+from .accounts import (
+    ACCOUNT_TYPE_VALUES,
+    AccountBalance,
+    AccountType,
+    ContributionFrequency,
+    ContributionRule,
+)
 from .assumptions import EconomicAssumptions
 from .household import HouseholdPlan, Section7Obligation
 from .objectives import ObjectiveName, ObjectiveSet, OptimizationObjective
@@ -13,6 +19,8 @@ __all__ = [
     "AccountBalance",
     "AccountType",
     "ACCOUNT_TYPE_VALUES",
+    "ContributionFrequency",
+    "ContributionRule",
     "DefinedBenefitPension",
     "EconomicAssumptions",
     "HouseholdPlan",

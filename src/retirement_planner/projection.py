@@ -93,16 +93,42 @@ def _year_fraction(start_date: date, end_date: date, year: int) -> float:
     return (interval_end - interval_start).days / _days_in_year(year)
 
 
-def _salary_for_year(person: PersonProfile, year: int, start_year: int) -> float:
-    if year < start_year:
+def _projection_year_activity_fraction(year: int, config: PlannerConfig) -> float:
+    """Return fraction of a projection year that remains after run_date in start_year."""
+    if year < config.start_year:
+        return 0.0
+    if year > config.start_year:
+        return 1.0
+
+    year_start = date(year, 1, 1)
+    next_year_start = date(year + 1, 1, 1)
+    interval_start = max(config.run_date, year_start)
+    if interval_start >= next_year_start:
+        return 0.0
+    return (next_year_start - interval_start).days / _days_in_year(year)
+
+
+def _salary_for_year(person: PersonProfile, year: int, config: PlannerConfig) -> float:
+    if year < config.start_year:
         return 0.0
 
     base_salary = person.annual_salary_overrides.get(
         year,
-        person.salary_start * (1 + person.salary_growth_rate) ** (year - start_year),
+        person.salary_start * (1 + person.salary_growth_rate) ** (year - config.start_year),
     )
     retirement_fraction = _year_fraction(date(year, 1, 1), person.retirement_date, year)
-    return base_salary * retirement_fraction
+    projection_activity_fraction = _projection_year_activity_fraction(year, config)
+    return base_salary * retirement_fraction * projection_activity_fraction
+
+
+def _full_year_salary_base(person: PersonProfile, year: int, start_year: int) -> float:
+    """Return salary basis before retirement proration for contribution rules."""
+    if year < start_year:
+        return 0.0
+    return person.annual_salary_overrides.get(
+        year,
+        person.salary_start * (1 + person.salary_growth_rate) ** (year - start_year),
+    )
 
 
 def _benefit_start_date(person: PersonProfile, start_age: int) -> date:
@@ -115,9 +141,10 @@ def _cpp_income_for_year(person: PersonProfile, year: int, config: PlannerConfig
         return 0.0
 
     annual_benefit = config.assumptions.cpp_max_annual_benefit * person.cpp_percent_of_max
+    projection_activity_fraction = _projection_year_activity_fraction(year, config)
     if year > start_date.year:
-        return annual_benefit
-    return annual_benefit * _year_fraction(start_date, date(year, 12, 31), year)
+        return annual_benefit * projection_activity_fraction
+    return annual_benefit * _year_fraction(start_date, date(year, 12, 31), year) * projection_activity_fraction
 
 
 def _oas_income_for_year(person: PersonProfile, year: int, config: PlannerConfig) -> float:
@@ -126,12 +153,18 @@ def _oas_income_for_year(person: PersonProfile, year: int, config: PlannerConfig
         return 0.0
 
     annual_benefit = config.assumptions.oas_max_annual_benefit * person.oas_percent_of_max
+    projection_activity_fraction = _projection_year_activity_fraction(year, config)
     if year > start_date.year:
-        return annual_benefit
-    return annual_benefit * _year_fraction(start_date, date(year, 12, 31), year)
+        return annual_benefit * projection_activity_fraction
+    return annual_benefit * _year_fraction(start_date, date(year, 12, 31), year) * projection_activity_fraction
 
 
-def _pension_income_for_year(pension: DefinedBenefitPension, person: PersonProfile, year: int) -> float:
+def _pension_income_for_year(
+    pension: DefinedBenefitPension,
+    person: PersonProfile,
+    year: int,
+    config: PlannerConfig,
+) -> float:
     if year < pension.start_date.year:
         return 0.0
 
@@ -139,17 +172,20 @@ def _pension_income_for_year(pension: DefinedBenefitPension, person: PersonProfi
     age_at_year_end = age_on_date(person.date_of_birth, date(year, 12, 31))
     bridge_active = pension.bridge_end_age is None or age_at_year_end < pension.bridge_end_age
     bridge_amount = pension.monthly_bridge_amount * 12 if bridge_active else 0.0
+    projection_activity_fraction = _projection_year_activity_fraction(year, config)
 
     if year > pension.start_date.year:
-        return annual_lifetime + bridge_amount
+        return (annual_lifetime + bridge_amount) * projection_activity_fraction
 
-    return (annual_lifetime + bridge_amount) * _year_fraction(pension.start_date, date(year, 12, 31), year)
+    return (annual_lifetime + bridge_amount) * _year_fraction(pension.start_date, date(year, 12, 31), year) * projection_activity_fraction
 
 
 def _project_accounts(
     accounts: list[AccountBalance],
     timeline_years: list[TimelineYear],
     config: PlannerConfig,
+    people_by_name: dict[str, PersonProfile],
+    employment_income_by_year_and_person: dict[int, dict[str, float]],
 ) -> list[AccountProjectionRow]:
     rows: list[AccountProjectionRow] = []
     balances = {
@@ -157,11 +193,35 @@ def _project_accounts(
     }
 
     for timeline_year in timeline_years:
+        year_income = employment_income_by_year_and_person.get(timeline_year.year, {})
+        projection_activity_fraction = _projection_year_activity_fraction(timeline_year.year, config)
         for account in accounts:
             key = (account.owner_name, account.account_type)
             opening_balance = balances[key]
-            investment_growth = opening_balance * config.assumptions.investment_return_rate
-            closing_balance = opening_balance + investment_growth
+            investment_growth = (
+                opening_balance
+                * config.assumptions.investment_return_rate
+                * projection_activity_fraction
+            )
+
+            contribution_amount = 0.0
+            owner = people_by_name.get(account.owner_name)
+            if owner is not None and account.contribution is not None:
+                if timeline_year.year < owner.retirement_date.year:
+                    pre_retirement_fraction = 1.0
+                elif timeline_year.year > owner.retirement_date.year:
+                    pre_retirement_fraction = 0.0
+                else:
+                    pre_retirement_fraction = _year_fraction(
+                        date(timeline_year.year, 1, 1),
+                        owner.retirement_date,
+                        timeline_year.year,
+                    )
+                if pre_retirement_fraction > 0:
+                    annual_base = account.contribution.annual_base_amount(year_income)
+                    contribution_amount = annual_base * pre_retirement_fraction * projection_activity_fraction
+
+            closing_balance = opening_balance + investment_growth + contribution_amount
             balances[key] = closing_balance
             rows.append(
                 AccountProjectionRow(
@@ -169,7 +229,7 @@ def _project_accounts(
                     owner_name=account.owner_name,
                     account_type=account.account_type,
                     opening_balance=opening_balance,
-                    investment_growth=investment_growth,
+                    investment_growth=investment_growth + contribution_amount,
                     closing_balance=closing_balance,
                 )
             )
@@ -182,8 +242,11 @@ def _project_residence(residence: Residence | None, timeline_years: list[Timelin
     if residence is None:
         return projected_values
 
-    for index, timeline_year in enumerate(timeline_years):
-        projected_values[timeline_year.year] = residence.current_value * (1 + config.assumptions.house_growth_rate) ** index
+    value = residence.current_value
+    for timeline_year in timeline_years:
+        projection_activity_fraction = _projection_year_activity_fraction(timeline_year.year, config)
+        value *= 1 + (config.assumptions.house_growth_rate * projection_activity_fraction)
+        projected_values[timeline_year.year] = value
 
     return projected_values
 
@@ -197,7 +260,26 @@ def project_household(household: HouseholdPlan, config: PlannerConfig) -> Projec
         inflation_rate=config.assumptions.inflation_rate,
     )
 
-    account_rows = _project_accounts(household.accounts, timeline, config)
+    people_by_name = {person.name: person for person in household.people}
+    employment_income_by_year_and_person: dict[int, dict[str, float]] = {}
+    full_year_salary_base_by_year_and_person: dict[int, dict[str, float]] = {}
+    for timeline_year in timeline:
+        employment_income_by_year_and_person[timeline_year.year] = {
+            person.name: _salary_for_year(person, timeline_year.year, config)
+            for person in household.people
+        }
+        full_year_salary_base_by_year_and_person[timeline_year.year] = {
+            person.name: _full_year_salary_base(person, timeline_year.year, config.start_year)
+            for person in household.people
+        }
+
+    account_rows = _project_accounts(
+        household.accounts,
+        timeline,
+        config,
+        people_by_name=people_by_name,
+        employment_income_by_year_and_person=full_year_salary_base_by_year_and_person,
+    )
     residence_values = _project_residence(household.residence, timeline, config)
 
     person_rows: list[PersonProjectionRow] = []
@@ -209,9 +291,9 @@ def project_household(household: HouseholdPlan, config: PlannerConfig) -> Projec
     for timeline_year in timeline:
         annual_person_rows: list[PersonProjectionRow] = []
         for person in household.people:
-            employment_income = _salary_for_year(person, timeline_year.year, config.start_year)
+            employment_income = employment_income_by_year_and_person[timeline_year.year][person.name]
             pension_income = sum(
-                _pension_income_for_year(pension, person, timeline_year.year)
+                _pension_income_for_year(pension, person, timeline_year.year, config)
                 for pension in household.pensions
                 if pension.owner_name == person.name
             )

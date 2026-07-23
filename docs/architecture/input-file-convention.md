@@ -44,6 +44,37 @@ balance = 250000
 owner_name = "Chris"
 account_type = "tfsa"
 balance = 110000
+contribution-frequency = "monthly"
+contribution-amount = 500
+```
+
+## Contribution Contract (Phase 1C)
+
+Each `[[accounts]]` entry may optionally include contribution metadata fields.
+
+Supported contribution frequencies:
+
+1. `yearly` with `amount`
+2. `monthly` with `amount`
+3. `biweekly` with `amount`
+4. `percent_of_income_annual` with `contribution-percent-of-income` and `contribution-income-source`
+
+Notes:
+
+1. Contribution metadata is optional; accounts can have no additional contributions.
+2. Contributions are applied in projection pre-retirement only.
+3. `contribution-income-source` must match a person name from `people.toml`.
+
+Example for percent-of-income:
+
+```toml
+[[accounts]]
+owner_name = "Chris"
+account_type = "non_registered"
+balance = 350
+contribution-frequency = "percent_of_income_annual"
+contribution-percent-of-income = 0.03
+contribution-income-source = "Chris"
 ```
 
 ## Validation Behavior
