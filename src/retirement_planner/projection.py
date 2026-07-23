@@ -23,6 +23,7 @@ from retirement_planner.models import (
     TimelineYear,
     build_yearly_timeline,
 )
+from retirement_planner.tax import compute_income_tax
 
 
 @dataclass(slots=True)
@@ -34,6 +35,10 @@ class PersonProjectionRow:
     cpp_income: float
     oas_income: float
     gross_income: float
+    federal_tax: float
+    ontario_tax: float
+    oas_clawback: float
+    total_tax: float
     section7_expense: float
     net_income: float
 
@@ -88,9 +93,21 @@ def _year_fraction(start_date: date, end_date: date, year: int) -> float:
     year_end = date(year, 12, 31)
     interval_start = max(start_date, year_start)
     interval_end = min(end_date, year_end)
-    if interval_end <= interval_start:
+    if interval_end < interval_start:
         return 0.0
-    return (interval_end - interval_start).days / _days_in_year(year)
+    # Inclusive day count so Jan 1 through Dec 31 is exactly 1.0.
+    return ((interval_end - interval_start).days + 1) / _days_in_year(year)
+
+
+def _salary_base_for_year(person: PersonProfile, year: int, start_year: int) -> float:
+    """Return full-year salary base with overrides as carry-forward baseline changes."""
+    override_years = [override_year for override_year in person.annual_salary_overrides if override_year <= year]
+    if not override_years:
+        return person.salary_start * (1 + person.salary_growth_rate) ** (year - start_year)
+
+    latest_override_year = max(override_years)
+    latest_override_salary = person.annual_salary_overrides[latest_override_year]
+    return latest_override_salary * (1 + person.salary_growth_rate) ** (year - latest_override_year)
 
 
 def _projection_year_activity_fraction(year: int, config: PlannerConfig) -> float:
@@ -112,10 +129,7 @@ def _salary_for_year(person: PersonProfile, year: int, config: PlannerConfig) ->
     if year < config.start_year:
         return 0.0
 
-    base_salary = person.annual_salary_overrides.get(
-        year,
-        person.salary_start * (1 + person.salary_growth_rate) ** (year - config.start_year),
-    )
+    base_salary = _salary_base_for_year(person, year, config.start_year)
     retirement_fraction = _year_fraction(date(year, 1, 1), person.retirement_date, year)
     projection_activity_fraction = _projection_year_activity_fraction(year, config)
     return base_salary * retirement_fraction * projection_activity_fraction
@@ -125,10 +139,7 @@ def _full_year_salary_base(person: PersonProfile, year: int, start_year: int) ->
     """Return salary basis before retirement proration for contribution rules."""
     if year < start_year:
         return 0.0
-    return person.annual_salary_overrides.get(
-        year,
-        person.salary_start * (1 + person.salary_growth_rate) ** (year - start_year),
-    )
+    return _salary_base_for_year(person, year, start_year)
 
 
 def _benefit_start_date(person: PersonProfile, start_age: int) -> date:
@@ -301,6 +312,13 @@ def project_household(household: HouseholdPlan, config: PlannerConfig) -> Projec
             oas_income = _oas_income_for_year(person, timeline_year.year, config)
 
             gross_income = employment_income + pension_income + cpp_income + oas_income
+            person_age = timeline_year.ages_at_year_end.get(person.name, 0)
+            tax_result = compute_income_tax(
+                taxable_income=gross_income,
+                age=person_age,
+                oas_income=oas_income,
+                eligible_pension_income=pension_income,
+            )
 
             if section7_obligation and person.name == payer_name:
                 section7_expense = section7_obligation.annual_expense * timeline_year.inflation_index * section7_obligation.payer_share_fraction
@@ -317,13 +335,18 @@ def project_household(household: HouseholdPlan, config: PlannerConfig) -> Projec
                 cpp_income=cpp_income,
                 oas_income=oas_income,
                 gross_income=gross_income,
+                federal_tax=tax_result.federal_tax,
+                ontario_tax=tax_result.ontario_tax,
+                oas_clawback=tax_result.oas_clawback,
+                total_tax=tax_result.total_tax,
                 section7_expense=section7_expense,
-                net_income=gross_income - section7_expense,
+                net_income=gross_income - tax_result.total_tax - section7_expense,
             )
             annual_person_rows.append(person_row)
             person_rows.append(person_row)
 
         gross_income_total = sum(row.gross_income for row in annual_person_rows)
+        total_tax = sum(row.total_tax for row in annual_person_rows)
         section7_expense_total = sum(row.section7_expense for row in annual_person_rows)
         net_income_total = sum(row.net_income for row in annual_person_rows)
 
@@ -345,7 +368,7 @@ def project_household(household: HouseholdPlan, config: PlannerConfig) -> Projec
             HouseholdProjectionRow(
                 year=timeline_year.year,
                 gross_income_total=gross_income_total,
-                total_tax=0.0,
+                total_tax=total_tax,
                 section7_expense_total=section7_expense_total,
                 net_income_total=net_income_total,
                 house_valuation=house_valuation,
@@ -449,6 +472,8 @@ def _build_output_columns(result: ProjectionResult) -> list[ProjectionOutputColu
     columns.extend(
         [
             ProjectionOutputColumn(key="house_value", header_row1="House", header_row2="Value", is_money=True),
+            ProjectionOutputColumn(key="income_tax", header_row1="Income Tax", header_row2="Total", is_money=True),
+            ProjectionOutputColumn(key="after_tax_income", header_row1="After-Tax Income", header_row2="Total", is_money=True),
             ProjectionOutputColumn(key="net_worth", header_row1="Net Worth", header_row2="Amount", is_money=True),
             ProjectionOutputColumn(
                 key="estate_before_tax",
@@ -502,6 +527,8 @@ def _projection_row_mapping(
     values: dict[str, object] = {
         "year": year,
         "house_value": _money(house_value),
+        "income_tax": _money(household_row.total_tax),
+        "after_tax_income": _money(household_row.net_income_total),
         "net_worth": _money(net_worth),
         "estate_before_tax": _money(estate_before_tax),
         "tax_on_estate": _money(tax_on_estate),
@@ -529,6 +556,86 @@ def _projection_row_mapping(
     return values
 
 
+def _cashflow_headers_and_rows(result: ProjectionResult) -> tuple[list[str], list[list[object]]]:
+    people = _distinct_people_in_order(result)
+    headers = ["Year"]
+
+    for person_name in people:
+        headers.extend(
+            [
+                f"{person_name} Employment Income",
+                f"{person_name} DB Pension",
+                f"{person_name} CPP",
+                f"{person_name} OAS",
+                f"{person_name} Gross Income",
+                f"{person_name} OAS Clawback",
+                f"{person_name} Income Tax",
+                f"{person_name} Average Tax Rate (%)",
+            ]
+        )
+
+    headers.extend(
+        [
+            "Household Gross Income",
+            "Household Income Tax",
+            "Household Average Tax Rate (%)",
+            "Section7 Expense Total",
+            "Household Net Income",
+        ]
+    )
+
+    person_rows_by_year_name = {
+        (row.year, row.person_name): row
+        for row in result.person_rows
+    }
+
+    def _money(value: float) -> int:
+        return int(round(value))
+
+    rows: list[list[object]] = []
+    for household_row in result.household_rows:
+        year = household_row.year
+        row_values: list[object] = [year]
+
+        for person_name in people:
+            person_row = person_rows_by_year_name[(year, person_name)]
+            person_avg_tax_rate = (
+                (person_row.total_tax / person_row.gross_income) * 100
+                if person_row.gross_income > 0
+                else 0.0
+            )
+            row_values.extend(
+                [
+                    _money(person_row.employment_income),
+                    _money(person_row.defined_benefit_pension_income),
+                    _money(person_row.cpp_income),
+                    _money(person_row.oas_income),
+                    _money(person_row.gross_income),
+                    _money(person_row.oas_clawback),
+                    _money(person_row.total_tax),
+                    round(person_avg_tax_rate, 2),
+                ]
+            )
+
+        household_avg_tax_rate = (
+            (household_row.total_tax / household_row.gross_income_total) * 100
+            if household_row.gross_income_total > 0
+            else 0.0
+        )
+        row_values.extend(
+            [
+                _money(household_row.gross_income_total),
+                _money(household_row.total_tax),
+                round(household_avg_tax_rate, 2),
+                _money(household_row.section7_expense_total),
+                _money(household_row.net_income_total),
+            ]
+        )
+        rows.append(row_values)
+
+    return headers, rows
+
+
 def write_projection_output(result: ProjectionResult, output_path: str | Path) -> Path:
     """Write the household projection rows to CSV or ODS based on the file extension."""
     path = Path(output_path)
@@ -537,6 +644,8 @@ def write_projection_output(result: ProjectionResult, output_path: str | Path) -
 
     if suffix == ".csv":
         _write_projection_csv(result, path)
+        cashflow_path = path.with_name(f"{path.stem}_cashflow.csv")
+        _write_cashflow_csv(result, cashflow_path)
     elif suffix == ".ods":
         _write_projection_ods(result, path)
     else:
@@ -555,6 +664,14 @@ def _write_projection_csv(result: ProjectionResult, output_path: Path) -> None:
         for row in result.household_rows:
             mapping = _projection_row_mapping(result, row, columns)
             writer.writerow([mapping[column.key] for column in columns])
+
+
+def _write_cashflow_csv(result: ProjectionResult, output_path: Path) -> None:
+    headers, rows = _cashflow_headers_and_rows(result)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(headers)
+        writer.writerows(rows)
 
 
 def _build_ods_content_xml(result: ProjectionResult) -> str:
@@ -590,9 +707,41 @@ def _build_ods_content_xml(result: ProjectionResult) -> str:
                 )
         rows_xml.append(f"<table:table-row>{''.join(cells)}</table:table-row>")
 
-    table_xml = (
+    household_table_xml = (
         '<table:table table:name="Household Projection">'
         + "".join(rows_xml)
+        + "</table:table>"
+    )
+
+    cashflow_headers, cashflow_rows = _cashflow_headers_and_rows(result)
+    cashflow_rows_xml = []
+
+    cashflow_header_cells = "".join(
+        f'<table:table-cell office:value-type="string"><text:p>{escape(header)}</text:p></table:table-cell>'
+        for header in cashflow_headers
+    )
+    cashflow_rows_xml.append(f"<table:table-row>{cashflow_header_cells}</table:table-row>")
+
+    for row in cashflow_rows:
+        cells = []
+        for value in row:
+            if isinstance(value, int):
+                cells.append(
+                    f'<table:table-cell office:value-type="float" office:value="{value}"><text:p>{value}</text:p></table:table-cell>'
+                )
+            elif isinstance(value, float):
+                cells.append(
+                    f'<table:table-cell office:value-type="float" office:value="{value}"><text:p>{value}</text:p></table:table-cell>'
+                )
+            else:
+                cells.append(
+                    f'<table:table-cell office:value-type="string"><text:p>{escape(str(value))}</text:p></table:table-cell>'
+                )
+        cashflow_rows_xml.append(f"<table:table-row>{''.join(cells)}</table:table-row>")
+
+    cashflow_table_xml = (
+        '<table:table table:name="CashFlow">'
+        + "".join(cashflow_rows_xml)
         + "</table:table>"
     )
 
@@ -600,7 +749,8 @@ def _build_ods_content_xml(result: ProjectionResult) -> str:
 <office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.3">
   <office:body>
     <office:spreadsheet>
-      {table_xml}
+            {household_table_xml}
+            {cashflow_table_xml}
     </office:spreadsheet>
   </office:body>
 </office:document-content>

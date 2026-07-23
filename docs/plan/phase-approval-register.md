@@ -15,7 +15,7 @@ Use this register as the formal gate for implementation start.
 |---|---|---|---|---|
 | Phase 0 - Architecture and Contracts | Complete | Chris | 2026-07-22 | Approved by Chris in chat; implemented and verified with passing tests. |
 | Phase 1 - Foundation Engine (Version 0.1) | In Progress | Chris | 2026-07-22 | Approved by Chris in chat; Phase 1A complete and Phase 1B projection started. |
-| Phase 2 - Tax Engine (Version 0.2) | Pending Review | Chris |  |  |
+| Phase 2 - Tax Engine (Version 0.2) | In Progress | Chris | 2026-07-22 | Approved by Chris in chat and started with baseline federal/Ontario tax + OAS clawback integration. |
 | Phase 3 - Decumulation Optimizer (Version 0.3) | Pending Review | Chris |  |  |
 | Phase 4 - Outputs and Review Workflow | Pending Review | Chris |  |  |
 | Phase 5 - Comparisons and Plan Health | Pending Review | Chris |  |  |

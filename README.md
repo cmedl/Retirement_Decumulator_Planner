@@ -36,3 +36,6 @@ To run the projection command directly, provide an output file ending in `.csv` 
 ```bash
 PYTHONPATH=src python -m retirement_planner.cli project data/master_data.toml build/projection.csv
 ```
+
+When output is `.csv`, the command also writes a companion cashflow file (for example `build/projection_cashflow.csv`).
+When output is `.ods`, the workbook includes both `Household Projection` and `CashFlow` sheets.
