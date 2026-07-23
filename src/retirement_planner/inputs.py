@@ -83,7 +83,7 @@ def _load_person(entry: dict[str, Any]) -> PersonProfile:
 
 def _load_account(entry: dict[str, Any]) -> AccountBalance:
     context = f"accounts[{entry.get('owner_name', '?')}]"
-    account_type = str(_require(entry, "account_type", context))
+    account_type = str(_require(entry, "account_type", context)).strip().lower()
     try:
         normalized_type = AccountType(account_type)
     except ValueError as exc:

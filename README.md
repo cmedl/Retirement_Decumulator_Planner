@@ -22,3 +22,17 @@ retirement-planner
 ```bash
 pytest
 ```
+
+## Build / Test / Demo
+
+Run the one-command workflow script:
+
+```bash
+./scripts/build_test_demo.sh
+```
+
+To run the projection command directly, provide an output file ending in `.csv` or `.ods`:
+
+```bash
+PYTHONPATH=src python -m retirement_planner.cli project data/master_data.toml build/projection.csv
+```

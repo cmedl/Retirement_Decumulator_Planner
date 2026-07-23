@@ -4,6 +4,7 @@ import pytest
 
 from retirement_planner.models import ACCOUNT_TYPE_VALUES
 from retirement_planner.inputs import InputFileError, load_plan_from_toml, summarize_loaded_plan
+from retirement_planner.validator import ValidationError
 
 
 def test_load_plan_from_toml_reads_household_and_config(tmp_path: Path) -> None:
@@ -174,6 +175,86 @@ balance = 1000
     )
 
     with pytest.raises(InputFileError, match=r"Invalid account_type 'cash'"):
+        load_plan_from_toml(input_file, project_root=tmp_path)
+
+
+def test_load_plan_from_toml_accepts_uppercase_account_type(tmp_path: Path) -> None:
+    data_dir = tmp_path / "my_retirement_data"
+    data_dir.mkdir()
+    input_file = tmp_path / "master_data.toml"
+    input_file.write_text(
+        """
+[data]
+base_dir = "my_retirement_data"
+
+[files]
+people = "people.toml"
+accounts = "accounts.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (data_dir / "people.toml").write_text(
+        """
+[[people]]
+name = "Chris"
+date_of_birth = "1980-05-01"
+retirement_date = "2040-07-01"
+""".strip(),
+        encoding="utf-8",
+    )
+    (data_dir / "accounts.toml").write_text(
+        """
+[[accounts]]
+owner_name = "Chris"
+account_type = "TFSA"
+balance = 1000
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config, household = load_plan_from_toml(input_file, project_root=tmp_path)
+
+    assert config.start_year == 2026
+    assert household.accounts[0].account_type.value == "tfsa"
+
+
+def test_load_plan_from_toml_rejects_invalid_section7_income_totals(tmp_path: Path) -> None:
+    data_dir = tmp_path / "my_retirement_data"
+    data_dir.mkdir()
+    input_file = tmp_path / "master_data.toml"
+    input_file.write_text(
+        """
+[data]
+base_dir = "my_retirement_data"
+
+[files]
+people = "people.toml"
+section7 = "section7.toml"
+""".strip(),
+        encoding="utf-8",
+    )
+    (data_dir / "people.toml").write_text(
+        """
+[[people]]
+name = "Chris"
+date_of_birth = "1980-05-01"
+retirement_date = "2040-07-01"
+""".strip(),
+        encoding="utf-8",
+    )
+    (data_dir / "section7.toml").write_text(
+        """
+[section7_obligation]
+payer_name = "Chris"
+payer_gross_income = 0
+other_party_gross_income = 0
+annual_expense = 1000
+indexed_to_inflation = true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match=r"must total more than zero"):
         load_plan_from_toml(input_file, project_root=tmp_path)
 
 

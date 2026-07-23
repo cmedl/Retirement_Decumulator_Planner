@@ -69,6 +69,13 @@ def validate_phase0_inputs(
     if assumptions.house_growth_rate <= -1.0:
         errors.append("assumptions.house_growth_rate must be greater than -1.0")
 
+    if household.section7_obligation is not None:
+        section7 = household.section7_obligation
+        if section7.payer_name not in {person.name for person in household.people}:
+            errors.append("section7_obligation.payer_name must match one of the household people")
+        if section7.payer_gross_income + section7.other_party_gross_income <= 0:
+            errors.append("section7_obligation gross incomes must total more than zero")
+
     errors.extend(_validate_data_dir(config, project_root=project_root))
 
     if errors:
